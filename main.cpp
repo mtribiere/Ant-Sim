@@ -12,22 +12,34 @@
 #include <SFML/Graphics.hpp>
 #include <cstring>
 #include <omp.h> 
+#include <pthread.h>
+#include <signal.h>
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 800
-#define ANTS_COUNT 10000
+#define ANTS_COUNT 100
 
 #include "Ant.hpp"
 #include "Food.hpp"
 #include "Wall.hpp"
 
+void signal_callback_handler(int signum);
 void sortAnts(Ant *ants);
+void *AntComputeThread(void *args);
 
-// Good Seeds : 
-// 50: Very demonstrative
-// 175: Very quick convergance
-// 124: Blocking
-// 
+
+struct AntArgument{
+    int ID;
+    Ant *ants;
+    Ant *bestAnts;
+    Food *food;
+    std::vector<Wall> *walls;
+
+    int state;
+};
+
+int globalExitFlag = 0;
+
 
 int main(int argc, char **argv)
 {   
@@ -37,13 +49,8 @@ int main(int argc, char **argv)
     else
         srand(time(NULL));
 
-    //Init UI
-    sf::RenderWindow window(sf::VideoMode(SCREEN_WIDTH, SCREEN_HEIGHT), "Ant simulator");
-    window.setPosition(sf::Vector2i(200,200));
 
-    //Init Ants
-    Ant *ants = (Ant*) malloc(sizeof(Ant)*ANTS_COUNT);
-    for(int i = 0;i<ANTS_COUNT;i++) ants[i] = Ant(); 
+    signal(SIGINT, signal_callback_handler);
     
     //Init Food
     Food food;
@@ -54,92 +61,209 @@ int main(int argc, char **argv)
     walls.push_back(Wall(sf::Vector2f(0,500),sf::Vector2f(300,50)));
     walls.push_back(Wall(sf::Vector2f(800-300,500),sf::Vector2f(300,50)));
 
-    int step = 0;
+    //Init Ants
+    Ant *ants = (Ant*) malloc(sizeof(Ant)*ANTS_COUNT);
+    for(int i = 0;i<ANTS_COUNT;i++) ants[i] = Ant(); 
+
+    //Init Ants threads and arguments
+    int state = 0; //0: Simulation | 1: Reproduction
+    pthread_t *antsThread = (pthread_t *) malloc(sizeof(pthread_t) * ANTS_COUNT);
+    struct AntArgument *antsArgument = (struct AntArgument *) malloc(sizeof(struct AntArgument) * ANTS_COUNT);
+    for(int i = 0;i<ANTS_COUNT;i++){
+
+        antsArgument[i].ID = i;
+        antsArgument[i].ants = ants;
+        antsArgument[i].food = &food;
+        antsArgument[i].walls = &walls;
+        antsArgument[i].state = 0;
+
+    }
+
     int generation = 0;
 
-    while (window.isOpen())
+    while (!globalExitFlag)
     {
 
         std::cout << "Generation " << generation << " -> ";
-        
-        //Compute an iteration
-        while(step<DNA_SIZE && window.isOpen()){
-            
-            ////////////////////////////////////////// Simulation part         
-            for(int antID=0;antID<ANTS_COUNT;antID++){
-                ants[antID].moveAnt(step);
-                ants[antID].checkCollision(food,walls);
-            }
 
-            ////////////////////////////////////////// Drawing part 
-            //Draw the ants
-            
-            window.clear();
+        //Run Ants
+        double tSimStart = omp_get_wtime();
 
-            for(int antID=0;antID<ANTS_COUNT;antID++){
-                window.draw((Ant)ants[antID]);
-            }
-
-            //Draw food
-            window.draw(food);
-            
-            //Draw walls
-            for(int i = 0;i< (int) walls.size();i++){
-                window.draw(walls[i]);
-            }
-
-            //Display everything
-            window.display();
-            
-
-            //Wait
-            std::this_thread::sleep_for (std::chrono::milliseconds(1));
-
-            step++;
-
-            //Search for an exit event
-            sf::Event event;
-            while (window.pollEvent(event))
-            {
-                if (event.type == sf::Event::Closed)
-                    window.close(); 
+        int rc;
+        for(int i = 0;i<ANTS_COUNT;i++){
+            antsArgument[i].state = 0;
+            rc = pthread_create(&antsThread[i], NULL, AntComputeThread, (void *)&antsArgument[i]);
+      
+            if (rc) {
+                std::cout << "Error: Unable to create thread," << rc << std::endl;
+                exit(-1);
             }
         }
 
-        if(!window.isOpen())
-            break;
+        //Join threads
+        for(int i = 0;i<ANTS_COUNT;i++)
+            pthread_join(antsThread[i],NULL);
+        
+        double tSimStop = omp_get_wtime() - tSimStart;
 
+        
         ////////////////////////////////////////// Genetic part 
         double tstart = omp_get_wtime();
 
-        //Compute the fitness
-        for(int antID = 0;antID<ANTS_COUNT;antID++){
-            ants[antID].computeFitness(food);
-        }
-
         //Sort Ants
         sortAnts(ants);
-
+        
         //How many found food
         int total = 0;
         for(int i = 0;i<ANTS_COUNT;i++){
             if(ants[i].getFitness() == 0)
                 total++;
         }
-        std::cout << total;
+        std::cout << total << " | Best: " << ants[0].getFitness();
 
         //Generate new generation DNA
-        Ant *antsTmp = (Ant*) malloc(sizeof(Ant)*ANTS_COUNT);
-        for(int i = 0;i<ANTS_COUNT;i++) antsTmp[i] = Ant(); 
-    
+        Ant *bestAnts = (Ant*) malloc(sizeof(Ant)*10);
+        memcpy(bestAnts,ants,sizeof(Ant)*10);
+        
         for(int i = 0;i<ANTS_COUNT;i++){
+
+            antsArgument[i].bestAnts = bestAnts;
+            antsArgument[i].state = 1;
+
+            rc = pthread_create(&antsThread[i], NULL, AntComputeThread, (void *)&antsArgument[i]);
             
+      
+            if (rc) {
+                std::cout << "Error: Unable to create thread," << rc << std::endl;
+                exit(-1);
+            }
+        }
+
+        //Join threads
+        for(int i = 0;i<ANTS_COUNT;i++)
+            pthread_join(antsThread[i],NULL);
+
+
+
+        free(bestAnts);
+
+        //Reset new generation
+        for(int antID = 0;antID<ANTS_COUNT;antID++){
+            ants[antID].reset();
+        }
+
+        generation++;
+
+        std::cout << " | Simulation time: " << tSimStop << " | Genetic time : " << omp_get_wtime()-tstart << std::endl;
+
+    }
+
+    free(ants);
+    free(antsThread);
+    free(antsArgument);
+    return 0;
+}
+
+
+
+void sortAnts(Ant *ants){
+
+    int bestAnts[10] = {-1};
+    bestAnts[0] = 0;
+    
+    //For 10 best Ants
+    for(int i = 0;i<10;i++){
+
+        //Find the next lowest
+        if(i == 0){
+
+            //Simple lowest finding
+            for(int antID = 0;antID < ANTS_COUNT;antID++){
+            
+                if(ants[antID].getFitness() <= ants[bestAnts[i]].getFitness()){
+                    bestAnts[i] = antID;
+                }
+           
+            }
+
+        }else{ //Please help
+
+            //Find init value (id not in the array)
+            for(int j = 0;j<ANTS_COUNT;j++){
+                int inArray = 0;
+                for(int k = 0;k<10;k++){
+                    if(bestAnts[k] == j)
+                        inArray = 1;
+                }
+
+                if(!inArray){
+                    bestAnts[i] = j;
+                    break;
+                }
+            }
+
+            //Look for every ant
+            for(int antID = 0;antID < ANTS_COUNT;antID++){
+                
+                //If this ant not in the array
+                int inArray = 0;
+                for(int j = 0;j<10;j++)
+                    if(bestAnts[j] == antID)
+                        inArray = 1;
+
+                if(!inArray){
+
+                    //If the ant as a lower fitness    
+                    if((ants[antID].getFitness() <= ants[bestAnts[i]].getFitness()) && (antID != bestAnts[i-1])){
+                        bestAnts[i] = antID;
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+ 
+
+    Ant tmpAnts[10];
+    for(int i = 0;i<10;i++){
+        tmpAnts[i] = ants[bestAnts[i]];
+    }
+
+    for(int i = 0;i<10;i++){
+        ants[i] = tmpAnts[i];
+    }
+}
+
+void *AntComputeThread(void *args){    
+    //Get all arguments out
+    struct AntArgument *antArg = (struct AntArgument *) args; 
+    int antID = antArg->ID;
+    
+
+    //Simulation
+    if((antArg->state) == 0){
+
+        //Compute the simulation
+        for(int i = 0;i<DNA_SIZE;i++){
+            (antArg->ants)[antID].moveAnt(i);
+            (antArg->ants)[antID].checkCollision(*(antArg->food),*(antArg->walls));
+        }
+
+        //Compute fitness
+        (antArg->ants)[antID].computeFitness(*(antArg->food));
+    
+    }else{ //Reproduction
+
             //Choose 2 parents
             int p1[DNA_SIZE];
             int p2[DNA_SIZE];
             
-            ants[rand()%10].getDNA(p1);
-            ants[rand()%10].getDNA(p2);
+            (antArg->bestAnts)[rand()%10].getDNA(p1);
+            (antArg->bestAnts)[rand()%10].getDNA(p2);
 
             //Choose a DNA merge point
             int mergePoint = rand()%DNA_SIZE;
@@ -164,48 +288,14 @@ int main(int argc, char **argv)
                     
             }
 
-            //Set DNA
-            antsTmp[i].setDNA(newDNA);
-
-        }
-
-        for(int i = 0;i<ANTS_COUNT;i++){
-            ants[i] = antsTmp[i];
-        }
-
-        free(antsTmp);
-
-        //Reset new generation
-        step = 0;
-        for(int antID = 0;antID<ANTS_COUNT;antID++){
-            ants[antID].reset();
-        }
-
-        generation++;
-
-        std::cout << " | Average compute time : " << omp_get_wtime()-tstart << std::endl;
+            (antArg->ants)[antID].setDNA(newDNA);
 
     }
-
-    free(ants);
-    return 0;
+    return NULL;
 }
 
-
-
-void sortAnts(Ant *ants){
-    int i,j;
-    for(i = 0;i<ANTS_COUNT-1;i++){
-        for(j = 0;j<ANTS_COUNT-1;j++){
-            
-            if(ants[j].getFitness() > ants[j+1].getFitness()){
-                
-                Ant tmp = ants[j];
-                ants[j] = ants[j+1];
-                ants[j+1] = tmp;
-
-            }
-
-        }
-    }
+// Define the function to be called when ctrl-c (SIGINT) is sent to process
+void signal_callback_handler(int signum) {
+    std::cout << "[I] Received CTRL-C signal, exiting next generation" << std::endl;
+    globalExitFlag = 1;
 }

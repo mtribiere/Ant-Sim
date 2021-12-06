@@ -16,6 +16,7 @@ class Ant: public sf::RectangleShape{
 
     public:
        Ant();
+       void AntInit();
        void moveAnt(int i);
        void getDNA(int *p){memcpy(p,this->DNA,DNA_SIZE*sizeof(int));};
        void setDNA(int *_DNA);
@@ -31,7 +32,7 @@ class Ant: public sf::RectangleShape{
         float endPosX;
         float endPosY;
         int DNA[DNA_SIZE]; 
-        
+
 };
 
 #endif

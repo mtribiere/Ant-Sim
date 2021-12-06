@@ -16,11 +16,12 @@ Ant::Ant(){
     this->fitness = -1;
     
     //Init Graphics
+    this->setPosition(sf::Vector2f(800/2,800/8));
+    this->setRotation(90);
     this->setSize(sf::Vector2f(ANT_HEIGHT,ANT_WIDTH));
     this->setFillColor(sf::Color::White);
 
-    this->setPosition(sf::Vector2f(800/2,800/8));
-    this->setRotation(90);
+
 }
 
 void Ant::moveAnt(int i){
