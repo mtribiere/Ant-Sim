@@ -8,6 +8,7 @@ A program to simulate evolving Ant. This repo is part of the final project for C
 
 # # Compile from source
 ```console
+user@debian:~$ sudo apt update && apt install libsfml-dev
 user@debian:~$ make
 ```
 
