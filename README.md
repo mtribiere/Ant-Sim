@@ -2,7 +2,7 @@
 A program to simulate evolving Ant 
 
 # # Showcase
-<img src="/img/vid1.gif" width="200"> <img src="/img/vid2.gif" width="200">
+<img src="/pics/vid1.gif" width="200"> <img src="/pics/vid2.gif" width="200">
 
 
 # # Compile from source
